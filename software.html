@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Software - AinRobot</title>
+  <style>
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+    :root {
+      --primary: #2563eb;
+      --primary-dark: #1d4ed8;
+      --bg: #f8fafc;
+      --text: #1e293b;
+      --text-light: #64748b;
+      --card-bg: #ffffff;
+      --border: #e2e8f0;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans SC", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+    }
+
+    a { color: var(--primary); text-decoration: none; }
+    a:hover { color: var(--primary-dark); }
+
+    nav {
+      position: sticky;
+      top: 0;
+      background: rgba(255,255,255,0.92);
+      backdrop-filter: blur(8px);
+      border-bottom: 1px solid var(--border);
+      padding: 0 1.5rem;
+      z-index: 100;
+    }
+    nav .inner {
+      max-width: 1120px;
+      margin: 0 auto;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 60px;
+    }
+    nav .brand { font-size: 1.25rem; font-weight: 700; color: var(--text); }
+    nav .links { display: flex; gap: 1.5rem; }
+    nav .links a { font-size: 0.95rem; color: var(--text-light); transition: color .2s; }
+    nav .links a:hover { color: var(--primary); }
+
+    .page-header {
+      max-width: 1120px;
+      margin: 0 auto;
+      padding: 3.5rem 1.5rem 2rem;
+      text-align: center;
+    }
+    .page-header h1 {
+      font-size: clamp(1.5rem, 4vw, 2.25rem);
+      font-weight: 800;
+      margin-bottom: 0.75rem;
+    }
+    .page-header h1 span { color: var(--primary); }
+    .page-header p {
+      font-size: 1.05rem;
+      color: var(--text-light);
+      max-width: 560px;
+      margin: 0 auto;
+    }
+
+    .tools {
+      max-width: 1120px;
+      margin: 0 auto;
+      padding: 1.5rem 1.5rem 4rem;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: 1.5rem;
+    }
+
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.75rem;
+      display: flex;
+      flex-direction: column;
+      transition: box-shadow .2s, transform .2s;
+    }
+    .card:hover {
+      box-shadow: 0 8px 24px rgba(0,0,0,0.08);
+      transform: translateY(-2px);
+    }
+
+    .card .card-top {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      margin-bottom: 1rem;
+    }
+
+    .card .icon {
+      width: 48px;
+      height: 48px;
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.4rem;
+      flex-shrink: 0;
+    }
+    .card .icon.blue { background: #eff6ff; }
+    .card .icon.amber { background: #fffbeb; }
+    .card .icon.teal { background: #f0fdfa; }
+    .card .icon.violet { background: #f5f3ff; }
+
+    .card .card-top h3 {
+      font-size: 1.1rem;
+      font-weight: 600;
+    }
+
+    .card .tag {
+      display: inline-block;
+      font-size: 0.7rem;
+      font-weight: 600;
+      padding: 2px 8px;
+      border-radius: 4px;
+      margin-left: 8px;
+      vertical-align: middle;
+    }
+    .tag.latest { background: #dcfce7; color: #16a34a; }
+    .tag.legacy { background: #f1f5f9; color: #94a3b8; }
+
+    .card p {
+      font-size: 0.925rem;
+      color: var(--text-light);
+      flex: 1;
+      margin-bottom: 1.25rem;
+    }
+
+    .card .features-list {
+      list-style: none;
+      margin-bottom: 1.25rem;
+    }
+    .card .features-list li {
+      font-size: 0.85rem;
+      color: var(--text-light);
+      padding: 3px 0;
+      padding-left: 1.2rem;
+      position: relative;
+    }
+    .card .features-list li::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      top: 10px;
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--primary);
+      opacity: 0.5;
+    }
+
+    .card .launch {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: var(--primary);
+      color: #fff;
+      padding: 0.6rem 1.25rem;
+      border-radius: 8px;
+      font-weight: 600;
+      font-size: 0.9rem;
+      transition: background .2s;
+      align-self: flex-start;
+    }
+    .card .launch:hover { background: var(--primary-dark); color: #fff; }
+    .card .launch .arrow { transition: transform .2s; }
+    .card .launch:hover .arrow { transform: translateX(3px); }
+
+    footer {
+      border-top: 1px solid var(--border);
+      text-align: center;
+      padding: 2rem 1.5rem;
+      font-size: 0.875rem;
+      color: var(--text-light);
+    }
+
+    @media (max-width: 600px) {
+      nav .links { gap: 1rem; }
+      .page-header { padding: 2rem 1.5rem 1.5rem; }
+      .grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+
+<nav>
+  <div class="inner">
+    <div class="brand">AinRobot</div>
+    <div class="links">
+      <a href="index.html">Home</a>
+      <a href="software.html">Software</a>
+      <a href="https://github.com/ainrobot">GitHub</a>
+    </div>
+  </div>
+</nav>
+
+<section class="page-header">
+  <h1>Online <span>Tools</span></h1>
+  <p>Browser-based serial communication and Modbus utilities. No installation required -- just open and use.</p>
+</section>
+
+<section class="tools">
+  <div class="grid">
+
+    <div class="card">
+      <div class="card-top">
+        <div class="icon blue">&#9881;</div>
+        <h3>Serial Auto Responder<span class="tag latest">v2</span></h3>
+      </div>
+      <p>Configure trigger/response byte sequences to automatically reply when matching data is received from a serial port. Ideal for protocol simulation and device testing.</p>
+      <ul class="features-list">
+        <li>Web Serial API -- works in Chrome/Edge without drivers</li>
+        <li>Flexible hex input: spaces, commas, or 0x prefix</li>
+        <li>Priority-based rule matching with enable/disable toggle</li>
+        <li>Real-time HEX / ASCII / dual-mode log viewer</li>
+        <li>Import and export rule configurations as JSON</li>
+      </ul>
+      <a class="launch" href="serial-auto-responder-v2.html">Open Tool <span class="arrow">&rarr;</span></a>
+    </div>
+
+    <div class="card">
+      <div class="card-top">
+        <div class="icon amber">&#8853;</div>
+        <h3>CRC16 Modbus Calculator</h3>
+      </div>
+      <p>Calculate CRC16 checksums for Modbus RTU frames. Enter hex bytes and instantly get the CRC result, CRC low/high bytes, and the complete frame with checksum appended.</p>
+      <ul class="features-list">
+        <li>Standard Modbus CRC16 (polynomial 0xA001)</li>
+        <li>Supports arbitrary hex byte input</li>
+        <li>Displays CRC-Lo and CRC-Hi separately</li>
+        <li>One-click copy of the full frame</li>
+      </ul>
+      <a class="launch" href="crc16_modbus.html">Open Tool <span class="arrow">&rarr;</span></a>
+    </div>
+
+    <div class="card">
+      <div class="card-top">
+        <div class="icon teal">&#8776;</div>
+        <h3>Water Level Simulator</h3>
+      </div>
+      <p>Simulate a Modbus RTU water level gauge slave device. Responds to register read requests with configurable water level, temperature, and device parameters.</p>
+      <ul class="features-list">
+        <li>Acts as a Modbus RTU slave via Web Serial API</li>
+        <li>Configurable slave address, baud rate, and register values</li>
+        <li>Real-time request/response monitoring</li>
+        <li>Useful for testing Modbus master implementations</li>
+      </ul>
+      <a class="launch" href="water_level_sim.html">Open Tool <span class="arrow">&rarr;</span></a>
+    </div>
+
+    <div class="card">
+      <div class="card-top">
+        <div class="icon violet">&#9881;</div>
+        <h3>Serial Auto Responder<span class="tag legacy">v1</span></h3>
+      </div>
+      <p>The original version of the serial auto responder tool with basic trigger/response matching. Retained for backwards compatibility.</p>
+      <ul class="features-list">
+        <li>Web Serial API based serial communication</li>
+        <li>Simple hex trigger/response rule configuration</li>
+        <li>HEX and ASCII log display</li>
+      </ul>
+      <a class="launch" href="serial_auto_responder.html">Open Tool <span class="arrow">&rarr;</span></a>
+    </div>
+
+  </div>
+</section>
+
+<footer>
+  &copy; 2026 AinRobot. All rights reserved.
+</footer>
+
+</body>
+</html>
