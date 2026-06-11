@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>计算 Modbus RTU CRC16</title>
+<style>
+  body {
+    font-family: "新细明体", "PMingLiU", "Microsoft JhengHei", "细明体", "MingLiU", serif;
+    font-size: 12px;
+    color: #000;
+    background: #fff;
+    margin: 0;
+    padding: 0;
+  }
+  a { color: #0000EE; text-decoration: underline; }
+  a:hover { color: #0000EE; }
+  .page {
+    width: 760px;
+    margin: 0 auto;
+    padding: 10px 0;
+  }
+  /* Banner */
+  .banner {
+    width: 100%;
+    height: 80px;
+    background: #4a6fa5;
+    color: #fff;
+    font-size: 18px;
+    font-weight: bold;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    letter-spacing: 1px;
+    line-height: 1.6;
+    margin-bottom: 15px;
+    border: 1px solid #333;
+    text-align: center;
+  }
+  .banner img {
+    height: 50px;
+    margin-right: 10px;
+    vertical-align: middle;
+  }
+  /* Title area */
+  .title-area {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-bottom: 5px;
+  }
+  h1 {
+    font-size: 24px;
+    color: #0000EE;
+    margin: 0;
+    font-weight: bold;
+    font-family: "新细明体", "PMingLiU", serif;
+  }
+  .last-update {
+    font-size: 11px;
+    color: #666;
+  }
+  /* Breadcrumb */
+  .breadcrumb {
+    font-size: 12px;
+    color: #000;
+    margin-bottom: 15px;
+    padding: 3px 0;
+  }
+  .breadcrumb a { color: #0000EE; }
+  .breadcrumb span { color: #666; }
+  /* Algorithm box */
+  .algo-box {
+    background: #f5f5f5;
+    border: 1px solid #ccc;
+    padding: 10px 15px;
+    margin-bottom: 20px;
+    line-height: 1.6;
+  }
+  .algo-title {
+    font-size: 12px;
+    font-weight: bold;
+    margin-bottom: 8px;
+  }
+  .algo-box ul {
+    margin: 0;
+    padding-left: 20px;
+  }
+  .algo-box li {
+    margin-bottom: 4px;
+  }
+  /* Input table */
+  .calc-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 15px;
+  }
+  .calc-table td, .calc-table th {
+    border: 1px solid #999;
+    padding: 6px 10px;
+    vertical-align: top;
+  }
+  .calc-table th {
+    background: #e8e8e8;
+    text-align: left;
+    font-weight: normal;
+    font-size: 12px;
+  }
+  .calc-table input[type="text"] {
+    width: 100%;
+    border: 1px solid #999;
+    padding: 4px 6px;
+    font-size: 13px;
+    font-family: "Courier New", "Consolas", monospace;
+    box-sizing: border-box;
+  }
+  .calc-table input[type="text"]:focus {
+    outline: none;
+    border-color: #666;
+  }
+  .result-cell {
+    background: #e0e0e0;
+    text-align: center;
+    font-family: "Courier New", "Consolas", monospace;
+    font-size: 14px;
+    font-weight: bold;
+    min-height: 30px;
+    padding: 8px;
+  }
+  /* Button */
+  .btn-row {
+    text-align: right;
+    margin-bottom: 20px;
+  }
+  button {
+    font-size: 12px;
+    padding: 3px 12px;
+    cursor: pointer;
+    border: 1px solid #999;
+    background: #e8e8e8;
+    color: #000;
+  }
+  button:hover {
+    background: #d0d0d0;
+  }
+  /* Download link */
+  .download-row {
+    font-size: 12px;
+    margin-top: 10px;
+  }
+  .download-row img {
+    width: 16px;
+    height: 16px;
+    vertical-align: middle;
+    margin-right: 4px;
+  }
+  /* Error message */
+  .error-msg {
+    color: #c00;
+    font-size: 12px;
+    margin-top: 5px;
+  }
+</style>
+</head>
+<body>
+<div class="page">
+  <!-- Banner -->
+  <div class="banner">
+    <div>提供嵌入式软硬件一体化解决方案<br>欢迎关注嵌入式小牛马微信公众号</div>
+  </div>
+
+  <!-- Title -->
+  <div class="title-area">
+    <h1>Modbus RTU CRC</h1>
+    <span class="last-update">Last update: 06/20/2018</span>
+  </div>
+
+  <!-- Breadcrumb -->
+  <div class="breadcrumb">
+    <a href="#">首页</a> &gt; <a href="#">开发/图控软件</a> &gt; 计算 Modbus RTU 校验码
+  </div>
+
+  <!-- Algorithm description -->
+  <div class="algo-box">
+    <div class="algo-title">RTU 校验码(CRC)计算, 运算规则如下：</div>
+    <ul>
+      <li>步骤1: 令 16-bit 寄存器 (CRC 寄存器) = 0xFFFF。</li>
+      <li>步骤2: Exclusive OR 第一个 8-bit byte 的消息指令与低字节 16-bit CRC 寄存器, 做 Exclusive OR 将结果存入 CRC 寄存器内。</li>
+      <li>步骤3: 右移一位 CRC 寄存器, 将 0 填入高字节处。</li>
+      <li>步骤4: 检查右移的值, 如果是 0 将步骤3 的新值存入 CRC 寄存器内, 否则 Exclusive OR 0xA001 与 CRC 寄存器, 将结果存入 CRC 寄存器内。</li>
+      <li>步骤5: 重复步骤3~步骤4, 将 8-bit 全部运算完成。</li>
+      <li>步骤6: 重复步骤2~步骤5, 取下一个 8-bit 的消息指令, 直到所有消息指令运算完成。最后, 得到的 CRC 寄存器的值, 即是 CRC 的校验码。值得注意的是 CRC 的校验码必须交换放置于消息指令的校验码中。</li>
+    </ul>
+  </div>
+
+  <!-- Calculation table -->
+  <table class="calc-table">
+    <tr>
+      <th style="width: 60%;">输入 Modbus 数据（使用空格分开）</th>
+      <th style="width: 40%;">校验码(CRC)</th>
+    </tr>
+    <tr>
+      <td>
+        <input type="text" id="hexInput" value="15 03 00 31 00 01" placeholder="例如: 15 03 00 31 00 01">
+        <div id="errorMsg" class="error-msg" style="display:none;"></div>
+      </td>
+      <td>
+        <div id="crcResult" class="result-cell">&nbsp;</div>
+      </td>
+    </tr>
+  </table>
+
+  <!-- Button -->
+  <div class="btn-row">
+    <button onclick="calculateCRC()">计算</button>
+  </div>
+
+  <!-- Download link -->
+  <div class="download-row">
+    <span style="display:inline-block;width:16px;height:16px;background:#666;color:#fff;font-size:10px;text-align:center;line-height:16px;margin-right:4px;vertical-align:middle;">▼</span>
+    <a href="#">下载 Modbus RTU 测试软件</a>
+  </div>
+</div>
+
+<script>
+function parseHexInput(str) {
+  var cleaned = str.replace(/[\s,]+/g, '');
+  if (cleaned.length % 2 !== 0) {
+    throw new Error('十六进制数据长度必须为偶数');
+  }
+  var bytes = [];
+  for (var i = 0; i < cleaned.length; i += 2) {
+    var byteStr = cleaned.substr(i, 2);
+    var val = parseInt(byteStr, 16);
+    if (isNaN(val)) {
+      throw new Error('包含无效的十六进制字符: ' + byteStr);
+    }
+    bytes.push(val);
+  }
+  return bytes;
+}
+
+function crc16Modbus(bytes) {
+  var crc = 0xFFFF;
+  for (var i = 0; i < bytes.length; i++) {
+    crc ^= bytes[i];
+    for (var j = 0; j < 8; j++) {
+      if (crc & 0x0001) {
+        crc = (crc >> 1) ^ 0xA001;
+      } else {
+        crc >>= 1;
+      }
+    }
+  }
+  return crc;
+}
+
+function toHex(n, pad) {
+  pad = pad || 2;
+  var s = n.toString(16).toUpperCase();
+  while (s.length < pad) s = '0' + s;
+  return s;
+}
+
+function calculateCRC() {
+  var input = document.getElementById('hexInput').value.trim();
+  var resultDiv = document.getElementById('crcResult');
+  var errorDiv = document.getElementById('errorMsg');
+  errorDiv.style.display = 'none';
+  errorDiv.textContent = '';
+
+  if (!input) {
+    resultDiv.innerHTML = '&nbsp;';
+    errorDiv.textContent = '请输入数据';
+    errorDiv.style.display = 'block';
+    return;
+  }
+
+  try {
+    var bytes = parseHexInput(input);
+    var crc = crc16Modbus(bytes);
+    var lowByte = crc & 0xFF;
+    var highByte = (crc >> 8) & 0xFF;
+    // Display swapped CRC (Lo Hi) as per original site behavior
+    resultDiv.textContent = toHex(lowByte, 2) + ' ' + toHex(highByte, 2);
+  } catch (e) {
+    resultDiv.innerHTML = '&nbsp;';
+    errorDiv.textContent = e.message;
+    errorDiv.style.display = 'block';
+  }
+}
+
+// Allow Enter key to calculate
+document.getElementById('hexInput').addEventListener('keydown', function(e) {
+  if (e.key === 'Enter') {
+    calculateCRC();
+  }
+});
+
+// Auto-calculate on page load with default value
+window.onload = function() {
+  calculateCRC();
+};
+</script>
+</body>
+</html>
