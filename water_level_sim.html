@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>Modbus RTU 水位计从站</title>
+    <style>
+        body { font-family: system-ui, sans-serif; background: #0f172a; color: #e2e8f0; padding: 20px; max-width: 800px; margin: 0 auto; }
+        h1 { text-align: center; font-size: 1.5rem; color: #38bdf8; margin-bottom: 6px; font-weight: 600; }
+        .subtitle { text-align: center; color: #64748b; font-size: 0.8rem; margin-bottom: 20px; }
+        .card { background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; padding: 16px; margin-bottom: 12px; }
+        h2 { margin: 0 0 12px; font-size: 1rem; color: #38bdf8; }
+        .row { display: flex; gap: 10px; align-items: center; margin-bottom: 10px; flex-wrap: wrap; }
+        input, select { background: #1e293b; border: 1px solid #334155; color: #fff; padding: 6px 10px; border-radius: 6px; font-size: 0.9rem; }
+        input[type="number"] { width: 100px; text-align: right; }
+        button { background: #0ea5e9; border: none; color: #fff; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 0.9rem; }
+        button:disabled { background: #334155; color: #94a3b8; cursor: not-allowed; }
+        .btn-red { background: #ef4444; }
+        .status { font-size: 0.8rem; padding: 4px 10px; border-radius: 12px; border: 1px solid; }
+        .off { color: #ef4444; border-color: rgba(239,68,68,0.3); background: rgba(239,68,68,0.1); }
+        .on { color: #22c55e; border-color: rgba(34,197,94,0.3); background: rgba(34,197,94,0.1); }
+        .log { background: #0b1120; border-radius: 6px; padding: 10px; font-family: monospace; font-size: 0.8rem; max-height: 250px; overflow-y: auto; white-space: pre-wrap; line-height: 1.6; color: #94a3b8; }
+        .tx { color: #4ade80; }
+        .rx { color: #f87171; }
+        .err { color: #fbbf24; }
+        .frame { font-family: monospace; background: #0b1120; padding: 10px; border-radius: 6px; border-left: 3px solid #38bdf8; margin-top: 8px; font-size: 0.9rem; }
+        .frame-req { border-left-color: #fbbf24; }
+        .frame-resp { border-left-color: #4ade80; }
+        .byte { display: inline-block; padding: 2px 5px; margin: 1px; border-radius: 3px; background: rgba(255,255,255,0.05); }
+        .addr { color: #f87171; }
+        .func { color: #fbbf24; }
+        .data { color: #38bdf8; }
+        .crc { color: #c084fc; }
+        label { font-size: 0.85rem; color: #94a3b8; }
+    </style>
+<base target="_blank">
+</head>
+<body>
+
+<h1>🔧 Modbus RTU 水位计从站</h1>
+<p class="subtitle">Web Serial API — 支持 Chrome/Edge 89+</p>
+
+<div class="card">
+    <h2>串口</h2>
+    <div class="row">
+        <button id="btnOpen" onclick="openPort()">打开串口</button>
+        <button id="btnClose" class="btn-red" onclick="closePort()" disabled>关闭</button>
+        <span id="connStatus" class="status off">未连接</span>
+    </div>
+    <div class="row">
+        <label>波特率 <select id="baud"><option>9600</option><option>19200</option><option>115200</option></select></label>
+        <label>数据位 <select><option>8</option></select></label>
+        <label>停止位 <select><option>1</option></select></label>
+        <label>校验 <select><option>None</option></select></label>
+    </div>
+</div>
+
+<div class="card">
+    <h2>水位设定</h2>
+    <div class="row">
+        <label>当前水位 <input type="number" id="levelM" value="15.80" step="0.01"> m</label>
+        <label>原始值 <input type="number" id="levelCm" value="1580" step="1" min="0" max="65535"> cm</label>
+        <button onclick="setFromM()">按米设定</button>
+        <button onclick="setFromCm()">按厘米设定</button>
+    </div>
+</div>
+
+<div class="card">
+    <h2>从站配置</h2>
+    <div class="row">
+        <label>地址 <input type="number" id="devAddr" value="1" min="1" max="247"></label>
+        <label>寄存器 <input type="text" id="regAddr" value="0x0000" style="width:80px;"></label>
+        <label>功能码 <input type="text" value="03" disabled style="width:40px;background:#0b1120;"></label>
+        <label><input type="checkbox" id="crcErr"> 模拟CRC错误</label>
+    </div>
+</div>
+
+<div class="card">
+    <h2>实时协议帧</h2>
+    <div class="frame frame-req" id="reqFrame">等待请求...</div>
+    <div class="frame frame-resp" id="respFrame" style="margin-top:10px;">等待响应...</div>
+</div>
+
+<div class="card">
+    <h2>通信日志</h2>
+    <div class="row">
+        <button onclick="clearLog()" class="btn-red" style="padding:4px 10px;font-size:0.8rem;">清空</button>
+    </div>
+    <div class="log" id="log">等待串口连接...</div>
+</div>
+
+<script>
+function crc16(buf) {
+    let crc = 0xFFFF;
+    for (let i = 0; i < buf.length; i++) {
+        crc ^= buf[i];
+        for (let j = 0; j < 8; j++) crc = (crc & 1) ? ((crc >> 1) ^ 0xA001) : (crc >> 1);
+    }
+    return crc & 0xFFFF;
+}
+const toHex = (n, p = 2) => n.toString(16).toUpperCase().padStart(p, '0');
+const toHexArr = a => a.map(b => toHex(b)).join(' ');
+
+function renderBytes(arr) {
+    return arr.map((b, i) => {
+        let c = 'data';
+        if (i === 0) c = 'addr';
+        else if (i === 1) c = 'func';
+        else if (i >= arr.length - 2) c = 'crc';
+        return `<span class="byte ${c}">${toHex(b)}</span>`;
+    }).join('');
+}
+
+let port = null, reader = null, writer = null, running = false;
+let rxBuf = new Uint8Array(0);
+let tmr = null;
+let levelCm = 1580;
+
+function getCfg() {
+    return {
+        addr: parseInt(document.getElementById('devAddr').value) || 1,
+        reg: parseInt(document.getElementById('regAddr').value) || 0
+    };
+}
+
+function getFrameGap() {
+    const baud = parseInt(document.getElementById('baud').value) || 9600;
+    return Math.ceil(11 * 3.5 * 1000 / baud);
+}
+
+function updatePreview() {
+    const { addr } = getCfg();
+    const h = (levelCm >> 8) & 0xFF, l = levelCm & 0xFF;
+    const resp = [addr, 0x03, 0x02, h, l];
+    const crc = crc16(resp);
+    const crcL = crc & 0xFF, crcH = (crc >> 8) & 0xFF;
+    const arr = [...resp, crcL, crcH];
+    document.getElementById('respFrame').innerHTML = renderBytes(arr) + ` <span style="color:#64748b">→ ${(levelCm/100).toFixed(2)} m</span>`;
+}
+
+function setFromM() {
+    let v = parseFloat(document.getElementById('levelM').value);
+    if (isNaN(v)) return;
+    levelCm = Math.max(0, Math.min(65535, Math.round(v * 100)));
+    document.getElementById('levelCm').value = levelCm;
+    document.getElementById('levelM').value = (levelCm / 100).toFixed(2);
+    updatePreview();
+    log('SYS', `水位设定: ${(levelCm/100).toFixed(2)} m (${levelCm} cm)`);
+}
+
+function setFromCm() {
+    let v = parseInt(document.getElementById('levelCm').value);
+    if (isNaN(v)) return;
+    levelCm = Math.max(0, Math.min(65535, v));
+    document.getElementById('levelCm').value = levelCm;
+    document.getElementById('levelM').value = (levelCm / 100).toFixed(2);
+    updatePreview();
+    log('SYS', `水位设定: ${(levelCm/100).toFixed(2)} m (${levelCm} cm)`);
+}
+
+function log(type, msg) {
+    const box = document.getElementById('log');
+    if (box.textContent === '等待串口连接...') box.textContent = '';
+    const t = new Date().toLocaleTimeString('zh-CN', {hour12:false}) + '.' + String(new Date().getMilliseconds()).padStart(3,'0');
+    box.textContent += `[${t}] [${type}] ${msg}\n`;
+    box.scrollTop = box.scrollHeight;
+}
+function clearLog() { document.getElementById('log').textContent = ''; }
+
+async function openPort() {
+    if (!('serial' in navigator)) { alert('需 Chrome/Edge 89+'); return; }
+    try {
+        port = await navigator.serial.requestPort();
+        await port.open({ baudRate: parseInt(document.getElementById('baud').value), dataBits: 8, stopBits: 1, parity: 'none' });
+        writer = port.writable.getWriter();
+        running = true; readLoop();
+        document.getElementById('btnOpen').disabled = true;
+        document.getElementById('btnClose').disabled = false;
+        const s = document.getElementById('connStatus');
+        s.className = 'status on'; s.textContent = '已连接';
+        log('SYS', '串口已打开');
+    } catch(e) { alert(e.message); }
+}
+
+async function closePort() {
+    running = false;
+    if (reader) { await reader.cancel(); reader = null; }
+    if (writer) { writer.releaseLock(); writer = null; }
+    if (port) { await port.close(); port = null; }
+    document.getElementById('btnOpen').disabled = false;
+    document.getElementById('btnClose').disabled = true;
+    const s = document.getElementById('connStatus');
+    s.className = 'status off'; s.textContent = '未连接';
+    document.getElementById('reqFrame').innerHTML = '等待请求...';
+    document.getElementById('respFrame').innerHTML = '等待响应...';
+    log('SYS', '串口已关闭');
+}
+
+async function readLoop() {
+    while (port && running) {
+        try {
+            reader = port.readable.getReader();
+            while (running) {
+                const { value, done } = await reader.read();
+                if (done) break;
+                if (value?.length) {
+                    const n = new Uint8Array(rxBuf.length + value.length);
+                    n.set(rxBuf); n.set(value, rxBuf.length);
+                    rxBuf = n;
+                    if (tmr) clearTimeout(tmr);
+                    tmr = setTimeout(processFrame, getFrameGap());
+                }
+            }
+        } catch(e) { if (running) log('ERR', e.message); }
+        finally { if (reader) { reader.releaseLock(); reader = null; } }
+    }
+}
+
+function sendException(func, code) {
+    const { addr } = getCfg();
+    const exc = [addr, func | 0x80, code];
+    const c = crc16(exc);
+    send(new Uint8Array([...exc, c & 0xFF, (c >> 8) & 0xFF]));
+}
+
+function processFrame() {
+    if (rxBuf.length < 4) { rxBuf = new Uint8Array(0); return; }
+    const f = rxBuf; rxBuf = new Uint8Array(0);
+    
+    const addr = f[0], func = f[1];
+    const recvCrc = (f[f.length-1] << 8) | f[f.length-2];
+    const calcCrc = crc16(f.slice(0, -2));
+    const { addr: myAddr, reg: myReg } = getCfg();
+    
+    document.getElementById('reqFrame').innerHTML = renderBytes([...f]) + ` <span style="color:#64748b">| addr=${addr} func=${func} len=${f.length}</span>`;
+    log('RX', `${toHexArr([...f])} | addr=${addr} func=${func} len=${f.length}`);
+    
+    if (addr !== myAddr) { log('SYS', `忽略: 地址 ${addr} != ${myAddr}`); return; }
+    if (recvCrc !== calcCrc) { log('ERR', `CRC 错: 收=${toHex(recvCrc,4)} 算=${toHex(calcCrc,4)}`); return; }
+    
+    if (func === 0x03) {
+        if (f.length !== 8) { log('ERR', `请求长度错误: ${f.length} != 8`); return; }
+        const reqReg = (f[2] << 8) | f[3];
+        const reqCount = (f[4] << 8) | f[5];
+        if (reqReg !== myReg) { sendException(func, 0x02); log('ERR', `非法数据地址: ${toHex(reqReg,4)}`); return; }
+        if (reqCount !== 1) { sendException(func, 0x03); log('ERR', `非法数据值: 数量=${reqCount}`); return; }
+        
+        const h = (levelCm >> 8) & 0xFF, l = levelCm & 0xFF;
+        const resp = [myAddr, 0x03, 0x02, h, l];
+        const crc = crc16(resp);
+        let crcL = crc & 0xFF, crcH = (crc >> 8) & 0xFF;
+        if (document.getElementById('crcErr').checked) crcH = (crcH + 1) & 0xFF;
+        send(new Uint8Array([...resp, crcL, crcH]));
+        
+    } else if (func === 0x06) {
+        if (f.length !== 8) { log('ERR', `请求长度错误: ${f.length} != 8`); return; }
+        const reqReg = (f[2] << 8) | f[3];
+        const val = (f[4] << 8) | f[5];
+        if (reqReg !== myReg) { sendException(func, 0x02); log('ERR', `非法数据地址: ${toHex(reqReg,4)}`); return; }
+        
+        levelCm = val;
+        document.getElementById('levelCm').value = levelCm;
+        document.getElementById('levelM').value = (levelCm / 100).toFixed(2);
+        updatePreview();
+        send(new Uint8Array(f));
+        log('SYS', `写入: ${val} cm = ${(val/100).toFixed(2)} m`);
+    } else {
+        sendException(func, 0x01);
+        log('ERR', `不支持功能码: ${func}`);
+    }
+}
+
+async function send(data) {
+    if (!writer) return;
+    try {
+        await writer.write(data);
+        document.getElementById('respFrame').innerHTML = renderBytes([...data]) + ` <span style="color:#64748b">| len=${data.length}</span>`;
+        log('TX', `${toHexArr([...data])}`);
+    } catch(e) { log('ERR', '发送失败: ' + e.message); }
+}
+
+document.getElementById('devAddr').addEventListener('change', updatePreview);
+document.getElementById('regAddr').addEventListener('change', updatePreview);
+document.getElementById('crcErr').addEventListener('change', updatePreview);
+
+updatePreview();
+</script>
+</body>
+</html>
