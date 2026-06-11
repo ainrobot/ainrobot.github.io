@@ -472,6 +472,9 @@ async function openPort() {
 
 async function closePort() {
   readLoopRunning = false;
+  writeQueue = [];
+  overrunCount = 0;
+  lastTriggerTime = {};
   if (reader) {
     try { await reader.cancel(); } catch(e) {}
     reader = null;
@@ -501,7 +504,19 @@ async function startReadLoop() {
         }
       }
     } catch (e) {
-      if (readLoopRunning) log('tx', 'sys', '读取错误: ' + e.message);
+      if (!readLoopRunning) break;
+      // Buffer overrun 自动恢复：释放旧 reader，短暂等待后重建
+      if (e.message && e.message.toLowerCase().includes('overrun')) {
+        overrunCount++;
+        log('tx', 'sys', 'Buffer overrun #' + overrunCount + '，自动恢复中...');
+        if (reader) {
+          try { reader.releaseLock(); } catch(_) {}
+          reader = null;
+        }
+        await new Promise(r => setTimeout(r, 50));  // 50ms 让硬件缓冲消化
+        continue;  // 外层 while 会重建 reader
+      }
+      log('tx', 'sys', '读取错误: ' + e.message);
     } finally {
       if (reader) {
         try { reader.releaseLock(); } catch(e) {}
@@ -535,6 +550,7 @@ function scanBuffer() {
 
   let maxTriggerLen = Math.max(...activeRules.map(r => r.trigger.length), 1);
   let changed = true;
+  const now = Date.now();
 
   while (changed && receiveBuffer.length > 0) {
     changed = false;
@@ -542,6 +558,16 @@ function scanBuffer() {
     for (const rule of activeRules) {
       const idx = findSubarray(receiveBuffer, rule.trigger);
       if (idx !== -1) {
+        // 速率限制：同一规则 100ms 内最多触发一次
+        const lastTime = lastTriggerTime[rule.id] || 0;
+        if (now - lastTime < 100) {
+          // 跳过本次匹配，但消费掉数据防止死循环
+          receiveBuffer = receiveBuffer.slice(idx + rule.trigger.length);
+          changed = true;
+          break;
+        }
+        lastTriggerTime[rule.id] = now;
+
         // 匹配成功：发送回复
         sendData(rule.response);
 
@@ -575,14 +601,31 @@ function findSubarray(arr, sub) {
   return -1;
 }
 
+let writeQueue = [];
+let isWriting = false;
+let overrunCount = 0;
+let lastTriggerTime = {};
+const MAX_LOG_ENTRIES = 5000;  // 每面板最多保留日志条数  // 规则冷却: { ruleId: timestamp }
+
 async function sendData(data) {
   if (!port || !port.writable) return;
+  writeQueue.push(data);
+  if (isWriting) return;
+  isWriting = true;
+  let writer = null;
   try {
-    const w = port.writable.getWriter();
-    await w.write(data);
-    w.releaseLock();
+    writer = port.writable.getWriter();
+    while (writeQueue.length > 0) {
+      const chunk = writeQueue.shift();
+      await writer.write(chunk);
+    }
   } catch (e) {
     log('tx', 'sys', '发送失败: ' + e.message);
+  } finally {
+    if (writer) {
+      try { writer.releaseLock(); } catch(_) {}
+    }
+    isWriting = false;
   }
 }
 
@@ -826,22 +869,57 @@ function log(panel, tag, text, rawBytes) {
   const now = new Date();
   const time = pad2(now.getHours()) + ':' + pad2(now.getMinutes()) + ':' + pad2(now.getSeconds()) + '.' + pad3(now.getMilliseconds());
   logEntries[panel].push({ time, tag, text, rawBytes });
-  if (!logPaused[panel]) renderLog(panel);
+
+  // 自动清理：超出上限时删除最旧的
+  const container = document.getElementById('log' + panel.charAt(0).toUpperCase() + panel.slice(1));
+  if (logEntries[panel].length > MAX_LOG_ENTRIES) {
+    logEntries[panel].shift();
+    if (container && container.firstChild) {
+      container.removeChild(container.firstChild);
+    }
+  }
+
+  if (!logPaused[panel]) {
+    appendLogEntry(panel, container, logEntries[panel].length - 1);
+    container.scrollTop = container.scrollHeight;
+  }
+}
+
+function appendLogEntry(panel, container, index) {
+  const e = logEntries[panel][index];
+  const mode = document.getElementById('displayMode' + panel.charAt(0).toUpperCase() + panel.slice(1)).value;
+  let dataStr = e.text;
+  if (e.rawBytes && mode === 'ascii') {
+    dataStr = bytesToAscii(e.rawBytes);
+  } else if (e.rawBytes && mode === 'both') {
+    dataStr = bytesToHex(e.rawBytes) + '  |  ' + bytesToAscii(e.rawBytes);
+  }
+  const div = document.createElement('div');
+  div.className = 'log-line';
+  div.innerHTML = '<span class="time">' + e.time + '</span><span class="tag ' + e.tag + '">' + e.tag + '</span><span class="data">' + escapeHtml(dataStr) + '</span>';
+  container.appendChild(div);
 }
 
 function renderLog(panel) {
+  // 全量渲染：仅用于切换显示模式或暂停恢复
   const container = document.getElementById('log' + panel.charAt(0).toUpperCase() + panel.slice(1));
-  const mode = document.getElementById('displayMode' + panel.charAt(0).toUpperCase() + panel.slice(1)).value;
-  const html = logEntries[panel].map(e => {
+  container.innerHTML = '';
+  const fragment = document.createDocumentFragment();
+  for (let i = 0; i < logEntries[panel].length; i++) {
+    const e = logEntries[panel][i];
+    const mode = document.getElementById('displayMode' + panel.charAt(0).toUpperCase() + panel.slice(1)).value;
     let dataStr = e.text;
     if (e.rawBytes && mode === 'ascii') {
       dataStr = bytesToAscii(e.rawBytes);
     } else if (e.rawBytes && mode === 'both') {
       dataStr = bytesToHex(e.rawBytes) + '  |  ' + bytesToAscii(e.rawBytes);
     }
-    return `<div class="log-line"><span class="time">${e.time}</span><span class="tag ${e.tag}">${e.tag}</span><span class="data">${escapeHtml(dataStr)}</span></div>`;
-  }).join('');
-  container.innerHTML = html;
+    const div = document.createElement('div');
+    div.className = 'log-line';
+    div.innerHTML = '<span class="time">' + e.time + '</span><span class="tag ' + e.tag + '">' + e.tag + '</span><span class="data">' + escapeHtml(dataStr) + '</span>';
+    fragment.appendChild(div);
+  }
+  container.appendChild(fragment);
   container.scrollTop = container.scrollHeight;
 }
 
