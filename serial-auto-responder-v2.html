@@ -168,12 +168,15 @@
   .log-panel-header .title .dot.rx { background: var(--rx); }
   .log-panel-header .title .dot.tx { background: var(--tx); }
   .log-panel-header .title .dot.sys { background: var(--text-muted); }
-  .log-panel-header .actions { display: flex; gap: 6px; }
+  .log-panel-header .actions { display: flex; gap: 6px; align-items: center; }
   .log-panel-header .actions button {
     padding: 2px 8px; font-size: 11px; border-radius: 4px; border: none; cursor: pointer;
     background: var(--border); color: var(--text); opacity: 0.7;
   }
   .log-panel-header .actions button:hover { opacity: 1; }
+  .log-panel-header .actions select {
+    padding: 2px 6px; font-size: 11px; min-width: 80px;
+  }
   .log-container {
     flex: 1; overflow-y: auto; padding: 8px 12px; font-family: "SF Mono", Monaco, "Cascadia Code", "Roboto Mono", Consolas, monospace;
     font-size: 12px; line-height: 1.7;
@@ -213,7 +216,6 @@
     padding: 6px 12px; border-bottom: 1px solid var(--border); display: flex; gap: 8px; align-items: center;
     transition: border-color 0.3s;
   }
-  .global-toolbar select { margin-left: auto; }
 </style>
 </head>
 <body>
@@ -279,11 +281,6 @@
   <div class="content">
     <div class="global-toolbar">
       <button class="btn secondary" onclick="clearAllLogs()">清空全部</button>
-      <select id="displayMode" onchange="renderAllLogs()">
-        <option value="hex">HEX 显示</option>
-        <option value="ascii">ASCII 显示</option>
-        <option value="both">HEX + ASCII</option>
-      </select>
     </div>
     <div class="log-panels">
       <div class="log-panel">
@@ -292,6 +289,11 @@
           <div class="actions">
             <button onclick="clearLog('rx')">清空</button>
             <button onclick="togglePause('rx')" id="btnPauseRx">暂停</button>
+            <select id="displayModeRx" onchange="renderLog('rx')">
+              <option value="hex">HEX</option>
+              <option value="ascii">ASCII</option>
+              <option value="both">HEX+ASCII</option>
+            </select>
           </div>
         </div>
         <div class="log-container" id="logRx"></div>
@@ -302,6 +304,11 @@
           <div class="actions">
             <button onclick="clearLog('tx')">清空</button>
             <button onclick="togglePause('tx')" id="btnPauseTx">暂停</button>
+            <select id="displayModeTx" onchange="renderLog('tx')">
+              <option value="hex">HEX</option>
+              <option value="ascii">ASCII</option>
+              <option value="both">HEX+ASCII</option>
+            </select>
           </div>
         </div>
         <div class="log-container" id="logTx"></div>
@@ -539,7 +546,6 @@ function scanBuffer() {
         sendData(rule.response);
 
         // 事件日志：只记录 TX 回复和匹配事件
-        const matchedBytes = receiveBuffer.slice(idx, idx + rule.trigger.length);
         log('tx', 'tx', bytesToHex(rule.response) + '  (触发: ' + rule.name + ')', rule.response);
 
         // 消费已匹配的数据
@@ -815,7 +821,7 @@ function importConfig(input) {
   input.value = '';
 }
 
-// ==================== 日志系统（双面板） ====================
+// ==================== 日志系统（双面板独立控制） ====================
 function log(panel, tag, text, rawBytes) {
   const now = new Date();
   const time = pad2(now.getHours()) + ':' + pad2(now.getMinutes()) + ':' + pad2(now.getSeconds()) + '.' + pad3(now.getMilliseconds());
@@ -825,7 +831,7 @@ function log(panel, tag, text, rawBytes) {
 
 function renderLog(panel) {
   const container = document.getElementById('log' + panel.charAt(0).toUpperCase() + panel.slice(1));
-  const mode = document.getElementById('displayMode').value;
+  const mode = document.getElementById('displayMode' + panel.charAt(0).toUpperCase() + panel.slice(1)).value;
   const html = logEntries[panel].map(e => {
     let dataStr = e.text;
     if (e.rawBytes && mode === 'ascii') {
@@ -839,11 +845,6 @@ function renderLog(panel) {
   container.scrollTop = container.scrollHeight;
 }
 
-function renderAllLogs() {
-  renderLog('rx');
-  renderLog('tx');
-}
-
 function clearLog(panel) {
   logEntries[panel] = [];
   renderLog(panel);
@@ -852,7 +853,8 @@ function clearLog(panel) {
 function clearAllLogs() {
   logEntries.rx = [];
   logEntries.tx = [];
-  renderAllLogs();
+  renderLog('rx');
+  renderLog('tx');
 }
 
 function togglePause(panel) {
@@ -863,6 +865,13 @@ function togglePause(panel) {
 }
 
 // ==================== 工具函数 ====================
+function isAllAscii(str) {
+  for (let i = 0; i < str.length; i++) {
+    if (str.charCodeAt(i) > 127) return false;
+  }
+  return true;
+}
+
 function bytesToHex(arr) {
   return Array.from(arr).map(b => b.toString(16).padStart(2, '0').toUpperCase()).join(' ');
 }
@@ -878,13 +887,6 @@ function escapeHtml(text) {
   const div = document.createElement('div');
   div.textContent = text;
   return div.innerHTML;
-}
-
-function isAllAscii(str) {
-  for (let i = 0; i < str.length; i++) {
-    if (str.charCodeAt(i) > 127) return false;
-  }
-  return true;
 }
 
 function pad2(n) { return n.toString().padStart(2, '0'); }
