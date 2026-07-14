@@ -128,6 +128,25 @@
   .editor-panel .field textarea { resize: vertical; min-height: 60px; }
   .editor-panel .hint { font-size: 11px; color: var(--text-muted); margin-top: 4px; }
   .editor-panel .actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 20px; }
+  .response-frames { display: flex; flex-direction: column; gap: 8px; }
+  .frame-row { background: var(--input-bg); border: 1px solid var(--border); border-radius: 6px; padding: 8px; }
+  .frame-controls { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; flex-wrap: wrap; }
+  .frame-controls .frame-unit { font-size: 11px; color: var(--text-muted); }
+  .frame-controls .frame-del {
+    margin-left: auto; width: 22px; height: 22px; padding: 0; border: none; border-radius: 4px;
+    cursor: pointer; background: var(--border); color: var(--text); font-size: 14px; line-height: 1; opacity: 0.7;
+  }
+  .frame-controls .frame-del:hover { opacity: 1; background: var(--danger); color: white; }
+  .editor-panel .frame-controls .frame-delay { width: 72px; flex: none; }
+  .editor-panel .frame-controls .frame-fmt { width: auto; min-width: 70px; flex: none; padding: 4px 8px; }
+  .editor-panel .frame-row textarea { width: 100%; min-height: 44px; }
+  .add-frame-btn { font-size: 12px; padding: 4px 10px; }
+  .rule-card .response-list { margin-top: 6px; }
+  .rule-card .frame-item { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 3px; }
+  .rule-card .frame-delay-tag {
+    font-size: 10px; padding: 1px 6px; border-radius: 3px;
+    background: rgba(59,130,246,0.15); color: var(--tx); min-width: 40px; text-align: center;
+  }
   .radio-group {
     display: flex; gap: 16px; margin-bottom: 6px;
   }
@@ -335,13 +354,10 @@
       <div class="hint" id="triggerHint">支持空格、逗号分隔，或 0x 前缀</div>
     </div>
     <div class="field">
-      <label>回复序列</label>
-      <div class="radio-group">
-        <label><input type="radio" name="responseFormat" value="hex" checked onchange="onFormatChange()"> 十六进制</label>
-        <label><input type="radio" name="responseFormat" value="string" onchange="onFormatChange()"> 字符串</label>
-      </div>
-      <textarea id="editResponse" placeholder="04 05 06"></textarea>
-      <div class="hint" id="responseHint"></div>
+      <label>回复序列（多帧，逐帧延时）</label>
+      <div class="response-frames" id="responseFrames"></div>
+      <button type="button" class="btn secondary add-frame-btn" onclick="addResponseFrame()">+ 添加帧</button>
+      <div class="hint">延时 = 发完上一帧后等待的毫秒数（首帧通常为 0）；每帧可单独选择 HEX / 字符串</div>
     </div>
     <div class="field">
       <label>优先级 (数字越小越优先)</label>
@@ -366,6 +382,7 @@ let rules = [];
 let logPaused = { rx: false, tx: false };
 let logEntries = { rx: [], tx: [] };
 let editingId = null;
+let editorFrames = [];
 let receiveBuffer = new Uint8Array(0);
 let nextId = 1;
 let currentTheme = 'dark';
@@ -428,12 +445,8 @@ function checkApiSupport() {
 // ==================== 格式切换提示 ====================
 function onFormatChange() {
   const tFmt = document.querySelector('input[name="triggerFormat"]:checked').value;
-  const rFmt = document.querySelector('input[name="responseFormat"]:checked').value;
   document.getElementById('triggerHint').textContent = tFmt === 'hex'
     ? '支持空格、逗号分隔，或 0x 前缀'
-    : '直接输入文本，仅支持 ASCII 字符（不支持中文）';
-  document.getElementById('responseHint').textContent = rFmt === 'hex'
-    ? ''
     : '直接输入文本，仅支持 ASCII 字符（不支持中文）';
 }
 
@@ -475,6 +488,8 @@ async function closePort() {
   writeQueue = [];
   overrunCount = 0;
   lastTriggerTime = {};
+  sequenceToken++;
+  ruleInFlight = {};
   if (reader) {
     try { await reader.cancel(); } catch(e) {}
     reader = null;
@@ -568,14 +583,15 @@ function scanBuffer() {
         }
         lastTriggerTime[rule.id] = now;
 
-        // 匹配成功：发送回复
-        sendData(rule.response);
-
-        // 事件日志：只记录 TX 回复和匹配事件
-        log('tx', 'tx', bytesToHex(rule.response) + '  (触发: ' + rule.name + ')', rule.response);
-
         // 消费已匹配的数据
         receiveBuffer = receiveBuffer.slice(idx + rule.trigger.length);
+
+        // 多帧回复序列；若该规则序列仍在发送中则忽略重触发
+        if (ruleInFlight[rule.id]) {
+          log('tx', 'sys', '规则「' + rule.name + '」序列进行中，忽略本次触发');
+        } else if (rule.responses && rule.responses.length > 0) {
+          sendResponseSequence(rule);
+        }
         changed = true;
         break;
       }
@@ -605,6 +621,8 @@ let writeQueue = [];
 let isWriting = false;
 let overrunCount = 0;
 let lastTriggerTime = {};
+let ruleInFlight = {};      // { ruleId: true } 标记某规则的多帧序列正在发送
+let sequenceToken = 0;      // closePort 时自增，用于中止所有进行中的回复序列
 const MAX_LOG_ENTRIES = 5000;  // 每面板最多保留日志条数  // 规则冷却: { ruleId: timestamp }
 
 async function sendData(data) {
@@ -629,27 +647,78 @@ async function sendData(data) {
   }
 }
 
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// 多帧回复序列：按顺序发送，帧间等待 delay 毫秒；端口关闭时通过 sequenceToken 自动中止
+async function sendResponseSequence(rule) {
+  const token = sequenceToken;
+  const total = rule.responses.length;
+  ruleInFlight[rule.id] = true;
+  try {
+    for (let i = 0; i < total; i++) {
+      if (token !== sequenceToken) return;
+      const step = rule.responses[i];
+      if (step.delay > 0) {
+        await sleep(step.delay);
+        if (token !== sequenceToken) return;
+      }
+      if (!port || !port.writable) return;
+      sendData(step.data);
+      log('tx', 'tx', bytesToHex(step.data) + '  (触发: ' + rule.name + ' · 帧 ' + (i + 1) + '/' + total + ')', step.data);
+    }
+  } finally {
+    if (token === sequenceToken) ruleInFlight[rule.id] = false;
+  }
+}
+
 // ==================== 规则管理 ====================
 function loadRules() {
   try {
     const raw = localStorage.getItem('serial_rules');
     if (raw) {
       const parsed = JSON.parse(raw);
-      rules = parsed.map(r => {
-        const trigger = parseInput(r.triggerRaw, r.triggerFormat || 'hex');
-        const response = parseInput(r.responseRaw, r.responseFormat || 'hex');
-        return { ...r, trigger, response };
-      });
+      rules = parsed.map(r => normalizeRule(r));
       nextId = Math.max(...rules.map(r => r.id), 0) + 1;
     }
   } catch(e) { rules = []; }
+}
+
+// 把存储/导入的规则对象规范化：解析 trigger，并把回复统一为 responses 数组（兼容旧版单回复）
+function normalizeRule(r) {
+  const trigger = parseInput(r.triggerRaw || '', r.triggerFormat || 'hex');
+  let responses;
+  if (Array.isArray(r.responses)) {
+    responses = r.responses.map(s => ({
+      raw: s.raw || '',
+      format: s.format || 'hex',
+      delay: typeof s.delay === 'number' ? Math.max(0, s.delay) : 0,
+      data: parseInput(s.raw || '', s.format || 'hex')
+    }));
+  } else if (r.responseRaw !== undefined) {
+    // 向后兼容 v2 单回复：迁移为单帧
+    responses = [{
+      raw: r.responseRaw, format: r.responseFormat || 'hex', delay: 0,
+      data: parseInput(r.responseRaw, r.responseFormat || 'hex')
+    }];
+  } else {
+    responses = [];
+  }
+  return {
+    id: r.id, name: r.name,
+    triggerRaw: r.triggerRaw, triggerFormat: r.triggerFormat || 'hex', trigger,
+    responses,
+    priority: typeof r.priority === 'number' ? r.priority : 0,
+    enabled: r.enabled !== false
+  };
 }
 
 function saveRules() {
   const serializable = rules.map(r => ({
     id: r.id, name: r.name,
     triggerRaw: r.triggerRaw, triggerFormat: r.triggerFormat,
-    responseRaw: r.responseRaw, responseFormat: r.responseFormat,
+    responses: r.responses.map(s => ({ raw: s.raw, format: s.format, delay: s.delay })),
     priority: r.priority, enabled: r.enabled
   }));
   localStorage.setItem('serial_rules', JSON.stringify(serializable));
@@ -669,9 +738,14 @@ function renderRules() {
   const sorted = [...rules].sort((a, b) => a.priority - b.priority);
   container.innerHTML = sorted.map(r => {
     const tHex = bytesToHex(r.trigger);
-    const rHex = bytesToHex(r.response);
     const tStr = r.triggerFormat === 'string' ? ' (字符串"' + escapeHtml(r.triggerRaw) + '")' : '';
-    const rStr = r.responseFormat === 'string' ? ' (字符串"' + escapeHtml(r.responseRaw) + '")' : '';
+    const framesHtml = r.responses.map(s => {
+      const hex = bytesToHex(s.data);
+      const sStr = s.format === 'string' ? ' (字符串"' + escapeHtml(s.raw) + '")' : '';
+      return `<div class="frame-item">
+          <span class="frame-delay-tag">${s.delay}ms</span><span class="format-tag">${s.format === 'string' ? 'STR' : 'HEX'}</span><span class="response">${hex}</span>${sStr}
+        </div>`;
+    }).join('');
     return `
     <div class="rule-card ${r.enabled ? '' : 'disabled'}">
       <div class="rule-header">
@@ -686,8 +760,10 @@ function renderRules() {
       </div>
       <div class="bytes">
         <span class="label">触发:</span><span class="trigger">${tHex}</span><span class="format-tag">${r.triggerFormat === 'string' ? 'STR' : 'HEX'}</span>${tStr}
-        <span style="margin:0 8px;color:var(--text-muted)">→</span>
-        <span class="label">回复:</span><span class="response">${rHex}</span><span class="format-tag">${r.responseFormat === 'string' ? 'STR' : 'HEX'}</span>${rStr}
+      </div>
+      <div class="bytes response-list">
+        <span class="label">回复(${r.responses.length}帧):</span>
+        ${framesHtml}
       </div>
     </div>
   `}).join('');
@@ -723,10 +799,10 @@ function openEditor() {
   document.getElementById('editorTitle').textContent = '添加规则';
   document.getElementById('editName').value = '';
   document.querySelector('input[name="triggerFormat"][value="hex"]').checked = true;
-  document.querySelector('input[name="responseFormat"][value="hex"]').checked = true;
   document.getElementById('editTrigger').value = '';
-  document.getElementById('editResponse').value = '';
   document.getElementById('editPriority').value = 1;
+  editorFrames = [{ delay: 0, raw: '', format: 'hex' }];
+  renderEditorFrames();
   onFormatChange();
   document.getElementById('editorOverlay').classList.add('active');
 }
@@ -738,10 +814,11 @@ function editRule(id) {
   document.getElementById('editorTitle').textContent = '编辑规则';
   document.getElementById('editName').value = r.name;
   document.querySelector('input[name="triggerFormat"][value="' + (r.triggerFormat || 'hex') + '"]').checked = true;
-  document.querySelector('input[name="responseFormat"][value="' + (r.responseFormat || 'hex') + '"]').checked = true;
   document.getElementById('editTrigger').value = r.triggerRaw;
-  document.getElementById('editResponse').value = r.responseRaw;
   document.getElementById('editPriority').value = r.priority;
+  editorFrames = r.responses.map(s => ({ delay: s.delay, raw: s.raw, format: s.format }));
+  if (editorFrames.length === 0) editorFrames = [{ delay: 0, raw: '', format: 'hex' }];
+  renderEditorFrames();
   onFormatChange();
   document.getElementById('editorOverlay').classList.add('active');
 }
@@ -750,30 +827,90 @@ function closeEditor() {
   document.getElementById('editorOverlay').classList.remove('active');
 }
 
+// 渲染编辑器中的回复帧列表
+function renderEditorFrames() {
+  const container = document.getElementById('responseFrames');
+  container.innerHTML = editorFrames.map((f, i) => `
+    <div class="frame-row">
+      <div class="frame-controls">
+        <input type="number" class="frame-delay" min="0" max="60000" value="${f.delay}" title="延时(毫秒)">
+        <span class="frame-unit">ms 后</span>
+        <select class="frame-fmt">
+          <option value="hex"${f.format === 'string' ? '' : ' selected'}>HEX</option>
+          <option value="string"${f.format === 'string' ? ' selected' : ''}>字符串</option>
+        </select>
+        <button type="button" class="frame-del" onclick="removeResponseFrame(${i})" title="删除该帧">×</button>
+      </div>
+      <textarea class="frame-data" placeholder="${f.format === 'string' ? '直接输入文本(ASCII)' : '04 05 06 或 0x04,0x05'}">${escapeHtml(f.raw)}</textarea>
+    </div>
+  `).join('');
+}
+
+// 从 DOM 同步当前编辑器帧到 editorFrames
+function syncEditorFrames() {
+  const rows = document.querySelectorAll('#responseFrames .frame-row');
+  const next = [];
+  rows.forEach(row => {
+    const delay = parseInt(row.querySelector('.frame-delay').value);
+    next.push({
+      delay: isNaN(delay) ? 0 : Math.max(0, delay),
+      raw: row.querySelector('.frame-data').value,
+      format: row.querySelector('.frame-fmt').value
+    });
+  });
+  editorFrames = next;
+}
+
+function addResponseFrame() {
+  syncEditorFrames();
+  const lastFmt = editorFrames.length > 0 ? editorFrames[editorFrames.length - 1].format : 'hex';
+  editorFrames.push({ delay: 0, raw: '', format: lastFmt });
+  renderEditorFrames();
+}
+
+function removeResponseFrame(idx) {
+  syncEditorFrames();
+  if (editorFrames.length <= 1) { showToast('至少保留一帧', 'error'); return; }
+  editorFrames.splice(idx, 1);
+  renderEditorFrames();
+}
+
 function saveRule() {
   const name = document.getElementById('editName').value.trim();
   const triggerRaw = document.getElementById('editTrigger').value;
-  const responseRaw = document.getElementById('editResponse').value;
   const triggerFormat = document.querySelector('input[name="triggerFormat"]:checked').value;
-  const responseFormat = document.querySelector('input[name="responseFormat"]:checked').value;
   const priority = parseInt(document.getElementById('editPriority').value) || 0;
 
   if (!name) { showToast('请输入规则名称', 'error'); return; }
 
-  let trigger, response;
+  let trigger;
   try { trigger = parseInput(triggerRaw, triggerFormat); }
   catch(e) { showToast('触发序列格式错误: ' + e.message, 'error'); return; }
-  try { response = parseInput(responseRaw, responseFormat); }
-  catch(e) { showToast('回复序列格式错误: ' + e.message, 'error'); return; }
 
   if (trigger.length === 0) { showToast('触发序列不能为空', 'error'); return; }
 
-  // ASCII 校验：字符串模式下禁止中文
   if (triggerFormat === 'string' && !isAllAscii(triggerRaw)) {
     showToast('触发序列（字符串模式）不支持中文，仅支持 ASCII 字符', 'error'); return;
   }
-  if (responseFormat === 'string' && !isAllAscii(responseRaw)) {
-    showToast('回复序列（字符串模式）不支持中文，仅支持 ASCII 字符', 'error'); return;
+
+  // 读取并校验每一帧回复
+  syncEditorFrames();
+  if (editorFrames.length === 0) { showToast('至少需要一帧回复', 'error'); return; }
+
+  const responses = [];
+  for (let i = 0; i < editorFrames.length; i++) {
+    const f = editorFrames[i];
+    if (!f.raw.trim()) { showToast('第 ' + (i + 1) + ' 帧数据不能为空', 'error'); return; }
+    let data;
+    try { data = parseInput(f.raw, f.format); }
+    catch(e) { showToast('第 ' + (i + 1) + ' 帧格式错误: ' + e.message, 'error'); return; }
+    if (f.format === 'string' && !isAllAscii(f.raw)) {
+      showToast('第 ' + (i + 1) + ' 帧（字符串模式）不支持中文，仅支持 ASCII 字符', 'error'); return;
+    }
+    responses.push({
+      raw: f.raw, format: f.format,
+      delay: Math.max(0, parseInt(f.delay) || 0), data
+    });
   }
 
   if (editingId) {
@@ -781,15 +918,14 @@ function saveRule() {
     if (r) {
       r.name = name;
       r.triggerRaw = triggerRaw; r.triggerFormat = triggerFormat; r.trigger = trigger;
-      r.responseRaw = responseRaw; r.responseFormat = responseFormat; r.response = response;
+      r.responses = responses;
       r.priority = priority;
     }
   } else {
     rules.push({
       id: nextId++, name,
       triggerRaw, triggerFormat, trigger,
-      responseRaw, responseFormat, response,
-      priority, enabled: true
+      responses, priority, enabled: true
     });
   }
 
@@ -821,11 +957,11 @@ function parseHex(str) {
 // ==================== 导入导出 ====================
 function exportConfig() {
   const data = {
-    version: 2,
+    version: 3,
     rules: rules.map(r => ({
       id: r.id, name: r.name,
       triggerRaw: r.triggerRaw, triggerFormat: r.triggerFormat,
-      responseRaw: r.responseRaw, responseFormat: r.responseFormat,
+      responses: r.responses.map(s => ({ raw: s.raw, format: s.format, delay: s.delay })),
       priority: r.priority, enabled: r.enabled
     }))
   };
@@ -847,11 +983,7 @@ function importConfig(input) {
     try {
       const data = JSON.parse(e.target.result);
       if (!data.rules || !Array.isArray(data.rules)) throw new Error('格式错误');
-      rules = data.rules.map(r => {
-        const trigger = parseInput(r.triggerRaw, r.triggerFormat || 'hex');
-        const response = parseInput(r.responseRaw, r.responseFormat || 'hex');
-        return { ...r, trigger, response };
-      });
+      rules = data.rules.map(r => normalizeRule(r));
       nextId = Math.max(...rules.map(r => r.id), 0) + 1;
       saveRules();
       renderRules();
