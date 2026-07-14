@@ -257,7 +257,7 @@
     <div class="serial-config">
       <div class="form-row">
         <label>波特率</label>
-        <select id="baudRate">
+        <select id="baudRate" onchange="onBaudRateChange()">
           <option value="9600">9600</option>
           <option value="19200">19200</option>
           <option value="38400">38400</option>
@@ -266,15 +266,16 @@
           <option value="230400">230400</option>
           <option value="460800">460800</option>
           <option value="921600">921600</option>
+          <option value="custom">custom</option>
         </select>
         <label>数据位</label>
-        <select id="dataBits"><option value="7">7</option><option value="8" selected>8</option></select>
+        <select id="dataBits" onchange="saveSerialConfig()"><option value="7">7</option><option value="8" selected>8</option></select>
       </div>
       <div class="form-row">
         <label>停止位</label>
-        <select id="stopBits"><option value="1" selected>1</option><option value="2">2</option></select>
+        <select id="stopBits" onchange="saveSerialConfig()"><option value="1" selected>1</option><option value="2">2</option></select>
         <label>校验</label>
-        <select id="parity"><option value="none" selected>None</option><option value="even">Even</option><option value="odd">Odd</option></select>
+        <select id="parity" onchange="saveSerialConfig()"><option value="none" selected>None</option><option value="even">Even</option><option value="odd">Odd</option></select>
       </div>
     </div>
 
@@ -370,6 +371,22 @@
   </div>
 </div>
 
+<!-- 自定义波特率弹窗 -->
+<div class="editor-overlay" id="baudOverlay">
+  <div class="editor-panel" style="width:360px;">
+    <h3>自定义波特率</h3>
+    <div class="field">
+      <label>波特率 (bps)</label>
+      <input type="number" id="baudRateCustom" min="1" placeholder="如 31250" onkeydown="if(event.key==='Enter') confirmCustomBaud()">
+      <div class="hint">输入正整数；部分速率可能不被硬件支持，以驱动返回为准。</div>
+    </div>
+    <div class="actions">
+      <button class="btn secondary" onclick="cancelCustomBaud()">取消</button>
+      <button class="btn" onclick="confirmCustomBaud()">确定</button>
+    </div>
+  </div>
+</div>
+
 <div class="toast" id="toast"></div>
 
 <script>
@@ -396,6 +413,7 @@ const encoder = new TextEncoder();
 document.addEventListener('DOMContentLoaded', () => {
   initTheme();
   checkApiSupport();
+  loadSerialConfig();
   loadRules();
   renderRules();
 });
@@ -461,10 +479,96 @@ async function selectPort() {
   }
 }
 
+// 波特率：下拉预设 + 自定义输入
+function getBaudRate() {
+  const sel = document.getElementById('baudRate');
+  if (sel.value === 'custom') {
+    return parseInt(document.getElementById('baudRateCustom').value);
+  }
+  return parseInt(sel.value);
+}
+
+let lastPresetBaud = '115200';
+
+function onBaudRateChange() {
+  const sel = document.getElementById('baudRate');
+  if (sel.value === 'custom') {
+    openCustomBaudModal();
+  } else {
+    lastPresetBaud = sel.value;
+    saveSerialConfig();
+  }
+}
+
+function setCustomBaudLabel(v) {
+  const opt = document.querySelector('#baudRate option[value="custom"]');
+  if (opt) opt.textContent = v ? ('custom (' + v + ')') : 'custom';
+}
+
+function openCustomBaudModal() {
+  document.getElementById('baudOverlay').classList.add('active');
+  const input = document.getElementById('baudRateCustom');
+  setTimeout(() => { input.focus(); input.select(); }, 0);
+}
+
+function confirmCustomBaud() {
+  const v = parseInt(document.getElementById('baudRateCustom').value);
+  if (!Number.isInteger(v) || v < 1) {
+    showToast('请输入有效的正整数波特率', 'error');
+    return;
+  }
+  document.getElementById('baudRateCustom').value = v;
+  setCustomBaudLabel(v);
+  document.getElementById('baudOverlay').classList.remove('active');
+  saveSerialConfig();
+  showToast('自定义波特率已设为 ' + v + ' bps', 'success');
+}
+
+function cancelCustomBaud() {
+  document.getElementById('baudRate').value = lastPresetBaud;
+  document.getElementById('baudOverlay').classList.remove('active');
+  saveSerialConfig();
+}
+
+// 串口配置持久化（波特率/数据位/停止位/校验）
+function loadSerialConfig() {
+  try {
+    const raw = localStorage.getItem('serial_config');
+    if (!raw) return;
+    const cfg = JSON.parse(raw);
+    const setVal = (id, v) => { if (v !== undefined && v !== null) document.getElementById(id).value = v; };
+    setVal('baudRate', cfg.baudRate);
+    setVal('baudRateCustom', cfg.baudRateCustom);
+    setVal('dataBits', cfg.dataBits);
+    setVal('stopBits', cfg.stopBits);
+    setVal('parity', cfg.parity);
+  } catch(e) {}
+  const bv = document.getElementById('baudRate').value;
+  lastPresetBaud = (bv && bv !== 'custom') ? bv : '115200';
+  if (document.getElementById('baudRate').value === 'custom') {
+    setCustomBaudLabel(document.getElementById('baudRateCustom').value);
+  }
+}
+
+function saveSerialConfig() {
+  const cfg = {
+    baudRate: document.getElementById('baudRate').value,
+    baudRateCustom: document.getElementById('baudRateCustom').value,
+    dataBits: document.getElementById('dataBits').value,
+    stopBits: document.getElementById('stopBits').value,
+    parity: document.getElementById('parity').value
+  };
+  localStorage.setItem('serial_config', JSON.stringify(cfg));
+}
+
 async function openPort() {
   if (!port) return;
   try {
-    const baudRate = parseInt(document.getElementById('baudRate').value);
+    const baudRate = getBaudRate();
+    if (!Number.isInteger(baudRate) || baudRate < 1) {
+      showToast('波特率无效，请输入正整数', 'error');
+      return;
+    }
     const dataBits = parseInt(document.getElementById('dataBits').value);
     const stopBits = parseInt(document.getElementById('stopBits').value);
     const parity = document.getElementById('parity').value;
